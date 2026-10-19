@@ -451,17 +451,24 @@ struct PreferencesView: View {
                 Picker("同时下载", selection: $store.parallelism) {
                     ForEach(1...4, id: \.self) { Text("\($0) 个任务").tag($0) }
                 }
+                Picker("每个文件的连接数", selection: $store.connections) {
+                    ForEach([1, 2, 4, 8], id: \.self) { Text($0 == 1 ? "单连接" : "\($0) 个连接").tag($0) }
+                }
+                Text("大文件自动分段并发下载；不支持安全分段的服务器会回退为单连接。设置对新建任务生效。")
+                    .font(.caption).foregroundStyle(.secondary)
             } header: { Label("下载", systemImage: "arrow.down.circle") }
             Section {
                 LabeledContent("FFmpeg") {
                     HStack {
                         Image(systemName: store.ffmpeg == nil ? "exclamationmark.circle.fill" : "checkmark.circle.fill").foregroundStyle(store.ffmpeg == nil ? .orange : .green)
-                        Text(store.ffmpeg == nil ? "未找到" : "已就绪").foregroundStyle(.secondary)
+                        Text(store.ffmpeg == nil ? "未找到" : store.ffmpeg == FFmpeg.bundledURL ? "已内置" : "自定义工具").foregroundStyle(.secondary)
                         Button("选择…") { store.chooseFFmpeg() }
                     }
                 }
                 if let binary = store.ffmpeg { Text(binary.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
-                else { Text("需要 FFmpeg 合并音视频。安装命令：brew install ffmpeg").font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                else { Text("内置媒体工具缺失，请重新安装完整 App，或手动选择 FFmpeg。").font(.caption).foregroundStyle(.secondary) }
+                Text("App 内置 FFmpeg，无需另行安装。仅用于本地音视频无损合并，LGPL 2.1 或更新版本许可；对应源码和构建说明随 App 附带。")
+                    .font(.caption).foregroundStyle(.secondary)
             } header: { Label("媒体工具", systemImage: "waveform") }
             Section {
                 Picker("外观", selection: $store.appearance) {
@@ -485,7 +492,7 @@ struct PreferencesView: View {
                     BrandMark(size: 48)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("BiliDownloader for Mac").font(.headline)
-                        Text("1.0.0 · SwiftUI / Liquid Glass").font(.caption).foregroundStyle(.secondary)
+                        Text("1.0.1 · SwiftUI / Liquid Glass").font(.caption).foregroundStyle(.secondary)
                         Link("基于 Majjcom/BiliDownloader · MIT 许可", destination: URL(string: "https://github.com/Majjcom/BiliDownloader")!).font(.caption)
                     }
                     Spacer()
@@ -494,6 +501,7 @@ struct PreferencesView: View {
         }
         .formStyle(.grouped)
         .onChange(of: store.parallelism) { store.savePreferences() }
+        .onChange(of: store.connections) { store.savePreferences() }
         .onChange(of: store.appearance) { store.savePreferences() }
     }
 }

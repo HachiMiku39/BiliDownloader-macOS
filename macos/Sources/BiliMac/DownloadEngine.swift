@@ -5,6 +5,7 @@ import Foundation
 final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let destination: URL
     private let resumeFile: URL
+    private let range: ByteRangeRequest?
     private let progress: @Sendable (Int64, Int64) -> Void
     private let lock = NSLock()
     private var continuation: CheckedContinuation<URL, Error>?
@@ -14,8 +15,8 @@ final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Send
     private var completedFile: URL?
     private var fileError: Error?
     private var lastProgress = Date.distantPast
-    init(destination: URL, resumeFile: URL, progress: @escaping @Sendable (Int64, Int64) -> Void) {
-        self.destination = destination; self.resumeFile = resumeFile; self.progress = progress
+    init(destination: URL, resumeFile: URL, range: ByteRangeRequest? = nil, progress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.destination = destination; self.resumeFile = resumeFile; self.range = range; self.progress = progress
     }
     func run(url: URL, cookie: String, useResume: Bool = true) async throws -> URL {
         try await withTaskCancellationHandler {
@@ -30,12 +31,17 @@ final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Send
                 let queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
                 let session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
                 self.session = session
-                if useResume, let data = try? Data(contentsOf: resumeFile), !data.isEmpty {
+                if range == nil, useResume, let data = try? Data(contentsOf: resumeFile), !data.isEmpty {
                     task = session.downloadTask(withResumeData: data)
                 } else {
                     var request = URLRequest(url: url)
                     request.setValue(BiliAPI.userAgent, forHTTPHeaderField: "User-Agent")
                     request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+                    request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                    if let range {
+                        request.setValue("bytes=\(range.start)-\(range.end)", forHTTPHeaderField: "Range")
+                        request.setValue(range.identity.validator, forHTTPHeaderField: "If-Range")
+                    }
                     // CDN URLs already carry authorization. Never forward account cookies
                     // to arbitrary media hosts.
                     if let host = url.host, host == "bilibili.com" || host.hasSuffix(".bilibili.com") {
@@ -66,6 +72,7 @@ final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Send
         }
         do {
             let size = (try FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
+            if let range { try range.validate(response: downloadTask.response as! HTTPURLResponse, actualSize: size) }
             guard size > 0 else { throw BiliError.message("下载服务器返回了空文件。") }
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
@@ -75,7 +82,7 @@ final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Send
         } catch { fileError = error }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let data = (error as NSError?)?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+        if range == nil, let data = (error as NSError?)?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
             try? data.write(to: resumeFile, options: .atomic)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: resumeFile.path)
         }
@@ -90,9 +97,11 @@ final class MediaTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Send
 }
 
 enum FFmpeg {
+    static var bundledURL: URL? { Bundle.main.resourceURL?.appendingPathComponent("ffmpeg") }
     static func locate(custom: String = "") -> URL? {
-        let bundled = Bundle.main.resourceURL?.appendingPathComponent("ffmpeg").path ?? ""
-        let candidates = [custom, bundled, "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        let bundled = bundledURL?.path ?? ""
+        let testOverride = ProcessInfo.processInfo.environment["BILIMAC_FFMPEG"] ?? ""
+        let candidates = [testOverride, custom, bundled, "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
             + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/ffmpeg" }
         return candidates.first(where: { !$0.isEmpty && FileManager.default.isExecutableFile(atPath: $0) }).map { URL(fileURLWithPath: $0) }
     }
@@ -169,7 +178,8 @@ enum DownloadEngine {
                     Task { await update(.downloading, ratio, detail) }
                 }
                 do {
-                    _ = try await MediaTransfer(destination: file, resumeFile: resume, progress: notify).run(url: entry.1.url, cookie: cookie)
+                    _ = try await ParallelTransfer.download(url: entry.1.url, cookie: cookie, destination: file,
+                        resumeFile: resume, connections: item.options.connections ?? 4, progress: notify)
                 } catch {
                     if Task.isCancelled { throw CancellationError() }
                     // Expired resume URLs and stale resume data are retried once with

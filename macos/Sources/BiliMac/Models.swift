@@ -135,6 +135,7 @@ struct DownloadOptions: Codable {
     var audioOnly = false
     var keepAudio = false
     var danmaku = false
+    var connections: Int? = nil
 }
 
 struct DownloadItem: Codable, Identifiable {

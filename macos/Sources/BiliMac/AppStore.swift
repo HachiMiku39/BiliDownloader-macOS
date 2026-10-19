@@ -31,6 +31,7 @@ final class AppStore: ObservableObject {
     @Published var folder: URL
     @Published var ffmpegPath: String
     @Published var parallelism: Int
+    @Published var connections: Int
     @Published var appearance: String
     @Published var focusInput = UUID()
     @Published var queueFilter = ""
@@ -47,6 +48,7 @@ final class AppStore: ObservableObject {
         folder = URL(fileURLWithPath: defaults.string(forKey: "downloadFolder") ?? AppPaths.downloads.path)
         ffmpegPath = defaults.string(forKey: "ffmpegPath") ?? ""
         parallelism = max(1, min(4, defaults.integer(forKey: "parallelism") == 0 ? 2 : defaults.integer(forKey: "parallelism")))
+        connections = max(1, min(8, defaults.integer(forKey: "connections") == 0 ? 4 : defaults.integer(forKey: "connections")))
         appearance = defaults.string(forKey: "appearance") ?? "system"
         if preview { return }
         do {
@@ -83,6 +85,7 @@ final class AppStore: ObservableObject {
         defaults.set(folder.path, forKey: "downloadFolder")
         defaults.set(ffmpegPath, forKey: "ffmpegPath")
         defaults.set(parallelism, forKey: "parallelism")
+        defaults.set(connections, forKey: "connections")
         defaults.set(appearance, forKey: "appearance")
         schedule()
     }
@@ -133,11 +136,12 @@ final class AppStore: ObservableObject {
     func toggleAll() { selectedParts = allSelected ? [] : Set(info?.parts.map(\.cid) ?? []) }
     func enqueue() {
         guard let info, !selectedParts.isEmpty else { return }
-        guard ffmpeg != nil else { error = "请先在设置中选择 FFmpeg。可通过 Homebrew 安装：brew install ffmpeg"; return }
+        guard ffmpeg != nil else { error = "内置媒体工具缺失，请重新安装完整 App，或在设置中选择 FFmpeg。"; return }
         guard playback?.preview != true else { error = "当前仅有试看片段，请登录拥有权限的账号后重新解析。"; return }
         for part in info.parts where selectedParts.contains(part.cid) {
             let title = info.parts.count == 1 ? info.title : "\(info.title) · P\(part.index) \(part.title)"
-            items.insert(.init(title: title, part: part, cover: info.cover, folder: folder, options: options), at: 0)
+            var itemOptions = options; itemOptions.connections = connections
+            items.insert(.init(title: title, part: part, cover: info.cover, folder: folder, options: itemOptions), at: 0)
         }
         saveItems(); section = .downloads; schedule()
     }

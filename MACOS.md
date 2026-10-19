@@ -5,7 +5,7 @@
 ## 安装与使用
 
 1. 打开 `BiliDownloader-macOS.dmg`，将 App 拖入“应用程序”。也可解压 `BiliDownloader-macOS.zip`，直接运行其中的 App。
-2. 安装 FFmpeg：`brew install ffmpeg`。App 自动查找 Apple Silicon 的 `/opt/homebrew/bin/ffmpeg`、Intel 的 `/usr/local/bin/ffmpeg`，也可在“设置 → 媒体工具”中手动选择。FFmpeg 单独安装，不包含在发布包中。
+2. App 已内置 FFmpeg，无需安装 Homebrew 或其他依赖。高级用户也可在“设置 → 媒体工具”中选择兼容的自定义 FFmpeg。
 3. 粘贴 B 站链接或 BV / AV / EP / MD / SS 编号，点击“解析视频”。支持 `b23.tv` 短链接。
 4. 勾选分集，选择画质、H.264 / HEVC / AV1 编码和下载文件夹，开始下载。
 5. 在“下载队列”中暂停、继续或重试；在“已完成”中点击文件夹图标，用 Finder 查看文件。
@@ -21,6 +21,7 @@ App 使用本地临时签名，**没有 Developer ID 签名或 Apple 公证**。
 - `⌘N` 新建，`⌘⇧N` 粘贴并新建，`⌘↩` 解析，`⌘,` 设置，`⌘⇧O` 打开下载文件夹。
 - Finder 文件夹选择器；可将链接文本拖入主窗口。
 - 1～4 个并发下载，默认 2 个。重新打开后，未完成任务暂停等待用户继续。
+- 每个文件可使用 1 / 2 / 4 / 8 个连接，默认 4 个。大文件分段并发下载，完成分段会保留以便续传；服务器不提供强文件版本标识、不支持 Range，或响应范围/版本不一致时回退为完整单连接下载。小文件使用单连接。
 - 使用 URLSession 的下载任务和 HTTP 验证信息续传，下载体不会一次性加载到内存。链接失效时刷新并重试；服务器不支持续传时重新下载。
 - 下载中间文件位于所选目录下的 `.BiliDownloader-任务UUID`；合并成功才发布最终视频。暂停保留中间文件，移除任务清理中间文件，保留成品。
 - FFmpeg 无损合并音视频；支持仅音频、保留独立音频、可用 FLAC / Dolby 音轨；XML 和 ASS 弹幕导出。ASS 支持普通滚动与顶部/底部固定弹幕，高级弹幕保留于 XML。
@@ -43,7 +44,9 @@ App 使用本地临时签名，**没有 Developer ID 签名或 Apple 公证**。
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./macos/scripts/build-app.sh
 ```
 
-Swift 包没有第三方依赖。也可以用 Xcode 打开 `macos/Package.swift` 继续开发。
+Swift 包没有第三方依赖。打包脚本从 FFmpeg 官方 GitHub 镜像下载固定的 n9.0.2 标签源码并校验 SHA-256，编译静态 FFmpeg 库，仅动态依赖 macOS 系统库。源码归档、许可证、校验和、配置参数及依赖列表会放入 App 的 `Contents/Resources/FFmpegSource/`。该 FFmpeg 专用于本地媒体无损合并，禁用网络协议、GPL、nonfree 和外部依赖。
+
+也可以用 Xcode 打开 `macos/Package.swift` 继续开发。直接运行 Swift 包时尚无 App 资源，可通过 `BILIMAC_FFMPEG` 指定本地工具以便开发验证。
 
 ## 验证
 
@@ -53,7 +56,7 @@ Swift 包没有第三方依赖。也可以用 Xcode 打开 `macos/Package.swift`
 ./macos/scripts/test.sh
 ```
 
-10 项 XCTest 覆盖编号解析、与上游 Python 一致的 WBI 签名、接口错误、DASH/番剧结构与画质音轨回退、文件名和任务记录、弹幕转义、HTTP 403、不间断数据校验的暂停续传，以及真实 H.264 + AAC 下载和 FFmpeg 合并。网络传输测试使用本机临时 HTTP 服务和自行生成的测试媒体；运行结束自动清理。
+XCTest 覆盖编号解析、与上游 Python 一致的 WBI 签名、接口错误、DASH/番剧结构与画质音轨回退、文件名和任务记录、弹幕转义、HTTP 403、暂停续传、分段并发上限、已完成分段复用、忽略或错误 Range / ETag 变化时的完整重下，以及真实 H.264 + AAC 下载和 FFmpeg 合并。网络传输测试使用本机临时 HTTP 服务和自行生成的测试媒体；运行结束自动清理。
 
 本次还通过实际 App 验证了公开 B 站视频的解析与可用画质、扫码登录二维码生成，以及浅深色首页、设置页、队列入口。未使用个人账号完成扫码登录，付费/大会员和地区限制资源未端到端验证。
 
@@ -62,3 +65,5 @@ Swift 包没有第三方依赖。也可以用 Xcode 打开 `macos/Package.swift`
 上游项目：[Majjcom/BiliDownloader](https://github.com/Majjcom/BiliDownloader)，源码获取日期为 2026-10-19。API 路径、WBI 算法和下载流程由其 Python 实现移植，MIT 许可见根目录 `LICENSE`。原 Windows / Linux 构建方式参见原始 `SETUP.md`。
 
 设计参考：[Apple — Adopting Liquid Glass](https://developer.apple.com/documentation/TechnologyOverviews/adopting-liquid-glass)。原生系统控件随运行系统呈现对应外观，玻璃效果只用于导航及操作层。
+
+分段并发设计参考：[Gopeed HTTP 下载实现](https://github.com/GopeedLab/gopeed/tree/5462b14705359ac081bab1b48dfeae330a0af0f5/internal/protocol/http)，参考快照为 `5462b14705359ac081bab1b48dfeae330a0af0f5`。Mac 版的固定分段工作队列、URLSession 任务、检查点文件和验证测试在 Swift 中独立实现。
