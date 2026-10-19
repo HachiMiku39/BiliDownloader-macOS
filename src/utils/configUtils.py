@@ -1,0 +1,124 @@
+import json
+import os
+
+from . import version
+
+
+class Configs:
+    VIDEO_CODEC = "video_codec"
+    DOWNLOAD_PATH = "downloadPath"
+    RESERVE_AUDIO = "reserveAudio"
+    SAVE_DANMAKU = "saveDanmaku"
+    MAX_THREAD_COUNT = "max_thread_count"
+    PASSPORT = "passport"
+    ULTRA_RESOLUTION = "ultra_resolution"
+    SHOW_DOWNLOAD_TIP = "show_download_tip"
+    QT_STYLE = "qt_ui_style"
+    DOWNLOAD_AUDIO_ONLY = "download_audio_only"
+    APPLY_HIGH_DPI = "apply_high_dpi"
+    PASSPORT_CRYPT_KEY = "passport_crypt_key"
+    DISABLE_TITLE_LENGTH_LIMIT = "disable_title_length_limit"
+    AUTO_FILL_DATA_FROM_CLIPBOARD = "auto_fill_data_from_clipboard"
+    PULL_DOLBY_AUDIO = "pull_dolby_audio"
+
+
+def setupUserData(reset: bool = False) -> None:
+    if not os.path.exists("data"):
+        os.mkdir("data")
+    if not os.path.exists("data/userdata.json"):
+        with open("data/userdata.json", "w", encoding="utf_8") as f:
+            meta = {
+                "version": version.__version__,
+                "isnew": False if reset else True,
+                "userinfo": dict(),
+            }
+            json.dump(meta, f, sort_keys=True, indent=2)
+
+
+class UserDataHelper:
+    def __init__(self, autosave=False):
+        setupUserData()
+        fp = open("data/userdata.json", "r", encoding="utf_8")
+        self.CFGS: Configs = Configs()
+        self.raw = json.load(fp)
+        self.KEYWD = ("version", "isnew")
+        self.autosave = autosave
+        self.changed = False
+        fp.close()
+
+    def set(self, key: str, value: {dict, list, int, float, str, None}):
+        if key in self.KEYWD:
+            self.raw[key] = value
+            self.changed = True
+            return
+
+        # Erase value
+        if value is None:
+            self.raw["userinfo"].pop(key)
+            self.changed = True
+            return
+
+        # Save same value
+        if self.raw["userinfo"].get(key, None) == value:
+            return
+
+        # Set value
+        self.raw["userinfo"][key] = value
+        self.changed = True
+
+        if self.autosave:
+            self.save()
+
+    def get(self, key, default=None):
+        if key in self.KEYWD:
+            return self.raw["key"]
+        return self.raw["userinfo"].get(key, default)
+
+    def save(self):
+        if not self.changed:
+            return
+        fp = open("data/userdata.json", "w", encoding="utf_8")
+        json.dump(self.raw, fp, sort_keys=True, indent=2)
+        fp.close()
+        self.changed = False
+
+    def reload(self):
+        fp = open("data/userdata.json", "r", encoding="utf_8")
+        self.raw = json.load(fp)
+        fp.close()
+        self.changed = False
+
+
+def getUserData(key: str, default=None):
+    keywd = ("version", "isnew")
+    setupUserData()
+    with open("data/userdata.json", "r", encoding="utf_8") as f:
+        userdata = json.load(f)
+    if key in keywd:
+        return userdata[key]
+    if key in userdata["userinfo"]:
+        return userdata["userinfo"][key]
+    return default
+
+
+def setUserData(key: str, value: {dict, list, int, float, str, None}) -> bool:
+    keywd = ("version", "isnew")
+    setupUserData()
+    with open("data/userdata.json", "r", encoding="utf_8") as f:
+        userdata: dict = json.load(f)
+    if key in keywd:
+        userdata[key] = value
+    else:
+        if value is None:
+            userdata["userinfo"].pop(key)
+        else:
+            userdata["userinfo"][key] = value
+    with open("data/userdata.json", "w", encoding="utf_8") as f:
+        json.dump(userdata, f, sort_keys=True, indent=2)
+    return True
+
+
+def reSetUserData():
+    setupUserData()
+    os.remove("data/userdata.json")
+    setupUserData(reset=True)

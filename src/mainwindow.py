@@ -1,0 +1,123 @@
+import subprocess
+
+from PySide6 import QtWidgets, QtCore
+
+from checkaccount import CheckAccountThread
+from dialogchangelog import show_changelog
+from dialogdownloadupdate import DialogDownloadUpdate
+from dialogupdateinfo import DialogUpdateInfo
+from ui_mainwindow import Ui_MainWindow
+from update import UpdateChecker, UpdateDownloader
+from utils import init, configUtils
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self, parent=None):
+        super(MainWindow, self).__init__(parent)
+
+        # Init
+        if init.init():
+            show_changelog(self)
+
+        self.ui = Ui_MainWindow()
+        self.ui.setupUi(self)
+
+        tab_names = ["输入", "下载", "设置", "关于"]
+        for i in range(len(tab_names)):
+            self.ui.tabWidget.setTabText(i, tab_names[i])
+
+        self.tabs = []
+        self.tab_now = 0
+        self.tabs.append(self.ui.widget_input)
+        self.tabs.append(self.ui.widget_download)
+        self.tabs.append(self.ui.widget_settings)
+        self.tabs.append(self.ui.widget_about)
+
+        for i in range(len(self.tabs)):
+            self.tabs[i].mw_tab_index = i
+
+        self.ui.widget_settings.load_settings()
+
+        self.ui.widget_input.setup_mainwindow(self)
+        self.ui.widget_input.setup_download(self.ui.widget_download)
+
+        self.ui.tabWidget.currentChanged.connect(self.on_tab_changes)
+
+        # Check Update
+        self.update_thread = UpdateChecker(self)
+        self.update_thread.finished.connect(self.update_finish)
+        self.update_thread.find_update.connect(self.find_update)
+        self.update_thread.start()
+
+        # Check Account
+        self.check_account_thread = CheckAccountThread(self)
+        self.check_account_thread.check_account_finished.connect(self.check_account_finished)
+        self.check_account_thread.start()
+
+    @QtCore.Slot(str, str)
+    def find_update(self, new: str, info: str):
+        self.ui.centralwidget.setEnabled(False)
+        dialog = DialogUpdateInfo(new, info, self)
+        resault = dialog.exec()
+        if resault == QtWidgets.QDialog.DialogCode.Rejected:
+            self.ui.centralwidget.setEnabled(True)
+            return
+        dialog = DialogDownloadUpdate(self)
+        self.download_thread = UpdateDownloader(self)
+        self.download_path = configUtils.getUserData(
+            "downloadPath", QtCore.QDir("Download").absolutePath()
+        )
+        self.download_thread.setup(self.download_path)
+        self.download_thread.update_process.connect(dialog.update_process)
+        self.download_thread.download_err.connect(self.download_err)
+        self.download_thread.download_install.connect(self.download_install)
+        self.download_thread.start()
+        dialog.exec()
+
+    @QtCore.Slot()
+    def update_finish(self):
+        QtCore.QObject.disconnect(self.update_thread, None, self, None)
+        del self.update_thread
+
+    @QtCore.Slot(bool)
+    def check_account_finished(self, res):
+        if not res:
+            QtWidgets.QMessageBox.information(
+                self,
+                "提醒",
+                "您的登录信息已失效，请及时重新登录\n视频下载可能会出现问题"
+            )
+
+    @QtCore.Slot(str)
+    def download_err(self, msg: str):
+        QtWidgets.QMessageBox.critical(self, "错误", "获取更新失败\n" + msg)
+
+    @QtCore.Slot()
+    def download_finished(self):
+        QtCore.QObject.disconnect(self.download_thread, None, self, None)
+        del self.download_thread
+
+    @QtCore.Slot(str)
+    def download_install(self, file: str):
+        self.close()
+        subprocess.call(
+            f"cmd /c start \"\" \"{file}\"",
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+    @QtCore.Slot(int)
+    def on_tab_changes(self, index):
+        for tab in self.tabs:
+            tab.update_tab_changes(self.tab_now, index)
+        self.tab_now = index
+
+    def change_tab(self, index):
+        self.ui.tabWidget.setCurrentIndex(index)
+
+    def closeEvent(self, event):
+        self.tabs[2].save_settings()
+        if self.ui.widget_download.shutdown():
+            event.accept()
+        else:
+            event.ignore()
+            QtCore.QTimer.singleShot(100, self.close)

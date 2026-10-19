@@ -1,0 +1,315 @@
+import pickle
+import time
+import traceback
+from os.path import isdir
+
+from PySide6 import QtWidgets, QtCore
+from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QMessageBox
+
+import style
+from Lib.bili_api import video, exceptions, bangumi
+from Lib.bili_api.utils.passport import BiliPassport, decode_cookie
+from centralcheckbox import CentralCheckBox
+from ui_configwidget import Ui_ConfigWidget
+from utils import configUtils
+from utils.removeSpecialChars import removeSpecialChars
+from utils.video_codec import video_codec_id
+
+video_codec_match = {}
+for _i in video_codec_id:
+    video_codec_match[video_codec_id[_i]] = _i
+
+
+def get_fnval(ultra: bool = False, dolby_audio: bool = False):
+    fnval = video.FNVAL_PRESET().default()
+    if ultra:
+        fnval |= video.FNVAL_PRESET.EighK | video.FNVAL_PRESET.HDR
+    if dolby_audio:
+        fnval |= video.FNVAL_PRESET.DolbyAudio
+    return fnval
+
+
+class ConfigWidget(QtWidgets.QWidget):
+    def __init__(self, parent: QtWidgets.QWidget = ...) -> None:
+        super().__init__(parent)
+        self.quality_match = {}
+        self.ui = Ui_ConfigWidget()
+        self.ui.setupUi(self)
+        self.fnval = get_fnval()
+        self.data = None
+        self.ai_language_title_map = {}
+        codecs = []
+        for i in video_codec_match:
+            codecs.append(i)
+        self.ui.combo_codec.addItems(codecs)
+        self.ui.button_path.clicked.connect(self.on_path_change_button_clicked)
+        self.ui.button_submit.clicked.connect(self.on_submit_button_clicked)
+        self.ui.line_path.textChanged.connect(self.on_path_changed)
+
+    @QtCore.Slot()
+    def on_path_change_button_clicked(self):
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "选择文件夹",
+            self.ui.line_path.text(),
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if len(path) == 0:
+            return
+        self.ui.line_path.setText(path)
+
+    @QtCore.Slot()
+    def on_submit_button_clicked(self):
+        self.ui.button_submit.setDisabled(True)
+        quality = self.quality_match[self.ui.combo_quality.currentText()]
+        codec = video_codec_match[self.ui.combo_codec.currentText()]
+        userdata = configUtils.UserDataHelper()
+        # reserveAudio = configUtils.getUserData(configUtils.Configs.RESERVE_AUDIO, False)
+        reserveAudio = userdata.get(userdata.CFGS.RESERVE_AUDIO, False)
+        disable_title_limit = userdata.get(userdata.CFGS.DISABLE_TITLE_LENGTH_LIMIT, False)
+        if disable_title_limit:
+            rmspchar = lambda s: removeSpecialChars(s, None)
+        else:
+            rmspchar = lambda s: removeSpecialChars(s)
+        special_audio = None
+        if self.ui.combo_audio.isEnabled():
+            special_audio = self.ui.combo_audio.currentText()
+            if len(special_audio) == 0:
+                special_audio = None
+        ai_language = None
+        if self.ui.combo_ai_language.isEnabled():
+            ai_language = self.ui.combo_ai_language.currentText()
+            if len(ai_language) == 0:
+                ai_language = None
+            else:
+                ai_language = self.ai_language_title_map[ai_language]
+        for i in self.data["download_data"]:
+            box_danmaku: CentralCheckBox = i["box_danmaku"]
+            box_audio: CentralCheckBox = i["box_audio"]
+            onlyAudio = box_audio.get_box().isChecked()
+            push = {
+                "path": self.ui.line_path.text(),
+                "quality": quality,
+                "codec": codec,
+                "name": "{:0>3d}-".format(i["page"]) + rmspchar(i["name"]),
+                "title": rmspchar(i["title"]),
+                "id": i["id"],
+                "isbvid": i["isbvid"],
+                "cid": i["cid"],
+                "reserveAudio": reserveAudio,
+                "onlyAudio": onlyAudio,
+                "saveDanmaku": box_danmaku.get_box().isChecked(),
+                "fnval": self.fnval,
+                "type": i["type"],
+                "specialAudio": special_audio,
+                "aiLanguage": ai_language,
+            }
+            self.parent().download.push_task(push)
+        self.parent().input_finished()
+
+    @QtCore.Slot(str)
+    def on_path_changed(self, path: str):
+        ex = isdir(path)
+        self.ui.button_submit.setEnabled(ex)
+        if not ex:
+            self.ui.line_path.setStyleSheet(style.BASIC_FONT_STYLE + style.RED_TEXT)
+        else:
+            self.ui.line_path.setStyleSheet(style.BASIC_FONT_STYLE)
+
+    @QtCore.Slot(QtCore.QByteArray, bool)
+    def update_info(self, data: QtCore.QByteArray, err: bool):
+        data = pickle.loads(data.data())
+        if err:
+            QMessageBox.critical(self, "错误", data)
+            self.ui.widget.setEnabled(False)
+            self.ui.button_submit.setEnabled(False)
+            return
+        quality = data["quality"]
+        self.quality_match = {}
+        for i in quality:
+            self.quality_match[i[1]] = i[0]
+            self.ui.combo_quality.addItem(i[1])
+        self.ui.widget.setEnabled(True)
+        self.ui.button_submit.setEnabled(True)
+        self.on_path_changed(self.ui.line_path.text())
+        if len(data["audio"]) > 0:
+            self.ui.label_audio.setEnabled(True)
+            self.ui.combo_audio.addItem("")
+            for i in data["audio"]:
+                self.ui.combo_audio.addItem(i)
+            self.ui.combo_audio.setEnabled(True)
+        else:
+            self.ui.combo_audio.setToolTip("当前视频无特殊音频")
+        if len(data["ai_language"]) > 0:
+            self.ui.label_ai_language.setEnabled(True)
+            self.ui.combo_ai_language.addItem("")
+            for i in data["ai_language"]:
+                self.ui.combo_ai_language.addItem(i["title"])
+                self.ai_language_title_map[i["title"]] = i["lang"]
+            self.ui.combo_ai_language.setEnabled(True)
+        else:
+            self.ui.combo_ai_language.setToolTip("当前视频无AI原声翻译")
+
+    @QtCore.Slot()
+    def load_finish(self):
+        QtCore.QObject.disconnect(self.load_thread, None, self, None)
+        del self.load_thread
+
+    def data_update(self, _back):
+        self.ui.widget.setEnabled(False)
+        self.ui.button_submit.setEnabled(False)
+        self.ui.combo_quality.clear()
+
+        self.ui.combo_audio.clear()
+        self.ui.combo_audio.setToolTip(None)
+        self.ui.combo_audio.setEnabled(False)
+        self.ui.label_audio.setEnabled(False)
+
+        self.ui.combo_ai_language.clear()
+        self.ui.combo_ai_language.setToolTip(None)
+        self.ui.combo_ai_language.setEnabled(False)
+        self.ui.label_ai_language.setEnabled(False)
+        self.ai_language_title_map = {}
+
+        self.ui.table_downloads.setRowCount(0)
+        userdata = configUtils.UserDataHelper()
+        codec = userdata.get(userdata.CFGS.VIDEO_CODEC, 7)
+        self.fnval = get_fnval(
+            userdata.get(userdata.CFGS.ULTRA_RESOLUTION, False),
+            userdata.get(userdata.CFGS.PULL_DOLBY_AUDIO, False)
+        )
+        self.ui.combo_codec.setCurrentText(video_codec_id[codec])
+        self.data = self.parent().input_pages[2].data
+        self.ui.line_path.setText(
+            userdata.get(
+                userdata.CFGS.DOWNLOAD_PATH,  # User
+                QtCore.QDir("Download").absolutePath()  # Default
+            )
+        )
+        download_danmaku = userdata.get(userdata.CFGS.SAVE_DANMAKU, False)
+        only_audio = userdata.get(userdata.CFGS.DOWNLOAD_AUDIO_ONLY, False)
+        self.data["download_data"] = []
+        for i in self.data["page_data"]:
+            if not i["box"].get_box().isChecked():
+                continue
+            self.ui.table_downloads.setRowCount(self.ui.table_downloads.rowCount() + 1)
+            i["box_danmaku"] = CentralCheckBox()
+            i["box_danmaku"].get_box().setChecked(download_danmaku)
+            i["box_audio"] = CentralCheckBox()
+            i["box_audio"].get_box().setChecked(only_audio)
+            self.ui.table_downloads.setCellWidget(
+                self.ui.table_downloads.rowCount() - 1, 0, i["box_danmaku"]
+            )
+            self.ui.table_downloads.setCellWidget(
+                self.ui.table_downloads.rowCount() - 1, 1, i["box_audio"]
+            )
+            self.ui.table_downloads.setItem(
+                self.ui.table_downloads.rowCount() - 1, 2, QTableWidgetItem(i["name"])
+            )
+            self.data["download_data"].append(i)
+        page = self.data["page_data"][0]
+        self.load_thread = GetVideoInfo(page["id"], page["isbvid"], page["cid"], self.fnval, page["type"], self)
+        self.load_thread.update_info.connect(self.update_info)
+        self.load_thread.finished.connect(self.load_finish)
+        self.load_thread.start()
+
+
+class GetVideoInfo(QtCore.QThread):
+    update_info = QtCore.Signal(QtCore.QByteArray, bool)
+
+    def __init__(
+            self, vid, isbvid: bool, cid, fnval: int, type_: str, parent: QtCore.QObject = ...
+    ) -> None:
+        super().__init__(parent)
+        self.vid = vid
+        self.isbvid = isbvid
+        self.cid = cid
+        self.fnval = fnval
+        self.type = type_
+
+    def run(self):
+        data = None
+        err = False
+        passport = configUtils.getUserData(configUtils.Configs.PASSPORT)
+        if passport is not None:
+            if "data" not in passport:
+                key = configUtils.getUserData(configUtils.Configs.PASSPORT_CRYPT_KEY)
+                passport["data"] = decode_cookie(passport["secure_data"], key)
+            if passport["data"] is not None:
+                passport = BiliPassport(passport["data"])
+            else:
+                passport = None
+        try_times = 0
+        while try_times < 2:
+            try:
+                if self.type == "video":
+                    if self.isbvid:
+                        data = video.get_video_url(bvid=self.vid, cid=self.cid, fnval=self.fnval, passport=passport)
+                    else:
+                        data = video.get_video_url(avid=self.vid, cid=self.cid, fnval=self.fnval, passport=passport)
+                elif self.type == "bangumi":
+                    if self.isbvid:
+                        data = bangumi.get_bangumi_url(
+                            bvid=self.vid,
+                            cid=self.cid,
+                            fnval=self.fnval,
+                            passport=passport
+                        )["video_info"]
+                    else:
+                        data = bangumi.get_bangumi_url(
+                            avid=self.vid,
+                            cid=self.cid,
+                            fnval=self.fnval,
+                            passport=passport
+                        )["video_info"]
+                quality = []
+                # for i in range(len(data["accept_quality"])):
+                #     quality.append(
+                #         (data["accept_quality"][i], data["accept_description"][i])
+                #     )
+                for i in data["support_formats"]:
+                    quality.append(
+                        (i["quality"], i["new_description"])
+                    )
+                audio = []
+                dash_data = data.get("dash", {})
+                if "flac" in dash_data:
+                    if dash_data["flac"] is not None:
+                        if dash_data["flac"]["audio"] is not None:
+                            audio.append("flac")
+                if "dolby" in dash_data:
+                    if dash_data["dolby"] is not None:
+                        if dash_data["dolby"]["audio"] is not None:
+                            if len(dash_data["dolby"]["audio"]) > 0:
+                                audio.append("dolby")
+                ai_language = []
+                if "language" in data:
+                    for l in data["language"]["items"]:
+                        lang = {
+                            "lang": l["lang"],
+                            "title": l["title"],
+                        }
+                        ai_language.append(lang)
+                data = {
+                    "audio": audio,
+                    "quality": quality,
+                    "ai_language": ai_language,
+                }
+                break
+            except exceptions.NetWorkException as ex:
+                data = str(ex)
+                try_times += 1
+                if try_times >= 2:
+                    if self.type == "video":
+                        self.type = "bangumi"
+                        try_times = 0
+                time.sleep(1.0)
+            except Exception as _ex:
+                data = traceback.format_exc()
+                try_times += 1
+                time.sleep(1.0)
+        else:
+            err = True
+        data = pickle.dumps(data)
+        data = QtCore.QByteArray(data)
+        self.update_info.emit(data, err)
