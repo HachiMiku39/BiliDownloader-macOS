@@ -231,7 +231,9 @@ enum DownloadEngine {
                 try ass.write(to: item.folder.appendingPathComponent(item.fileStem + ".ass"), atomically: true, encoding: .utf8)
             } catch { warnings.append("视频已保存，弹幕导出失败：\(error.localizedDescription)") }
         }
-        if let video, video.quality != item.options.quality { warnings.append("已使用可用画质：\(playback.qualityName(video.quality))") }
+        if !item.options.audioOnly, let video, video.quality != item.options.quality {
+            warnings.append("所选画质\(playback.qualityName(item.options.quality))未提供，实际下载：\(playback.qualityName(video.quality))")
+        }
         try? fm.removeItem(at: cache)
         return .init(output: output, warning: warnings.isEmpty ? nil : warnings.joined(separator: "；"))
     }

@@ -38,6 +38,12 @@ final class TransferTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
     func testRealDASHDownloadAndFFmpegMerge() async throws {
+        try await assertDASHDownload(actualQuality: 80, requestedQuality: 80)
+    }
+    func testAdvertisedHDFallbackReportsActualDownloadedQuality() async throws {
+        try await assertDASHDownload(actualQuality: 32, requestedQuality: 80)
+    }
+    private func assertDASHDownload(actualQuality: Int, requestedQuality: Int) async throws {
         let base = try baseURL()
         guard let binary = FFmpeg.locate() else { throw XCTSkip("FFmpeg unavailable") }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -49,20 +55,27 @@ final class TransferTests: XCTestCase {
             if request.url!.path.hasSuffix("/nav") {
                 raw = ["code": -101, "data": ["wbi_img": ["img_url": "https://example.com/7cd084941338484aae1ad9425b84077c.png", "sub_url": "https://example.com/4932caff0ff746eab6f01bf08b70ac45.png"]]]
             } else {
-                raw = ["code": 0, "data": ["dash": [
-                    "video": [["id": 80, "codecid": 7, "baseUrl": base.appendingPathComponent("video.mp4").absoluteString]],
+                let params = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(params.first(where: { $0.name == "qn" })?.value, String(requestedQuality))
+                raw = ["code": 0, "data": ["support_formats": [["quality": 80], ["quality": 32]], "dash": [
+                    "video": [["id": actualQuality, "codecid": 7, "baseUrl": base.appendingPathComponent("video.mp4").absoluteString]],
                     "audio": [["baseUrl": base.appendingPathComponent("audio.m4a").absoluteString, "bandwidth": 128000]]]]]
             }
             return (200, try JSONSerialization.data(withJSONObject: raw))
         }
         let api = BiliAPI(session: URLSession(configuration: config))
         let part = VideoPart(cid: 1, title: "fixture", index: 1, duration: 1, bvid: "BV17x411w7KC", aid: 170001)
-        let item = DownloadItem(title: "测试 '文件' $(literal)", part: part, folder: folder, options: .init())
+        var options = DownloadOptions(); options.quality = requestedQuality
+        let item = DownloadItem(title: "测试 '文件' $(literal)", part: part, folder: folder, options: options)
         let result = try await DownloadEngine.run(item, api: api, ffmpeg: binary) { _, _, _ in }
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.output.path))
         XCTAssertEqual(result.output.pathExtension, "mp4")
         XCTAssertGreaterThan(try Data(contentsOf: result.output).count, 1000)
-        XCTAssertNil(result.warning)
+        if actualQuality == requestedQuality { XCTAssertNil(result.warning) }
+        else {
+            XCTAssertTrue(result.warning?.contains("1080P 高清") == true)
+            XCTAssertTrue(result.warning?.contains("实际下载：480P") == true)
+        }
         let process = Process(); process.executableURL = binary
         let pipe = Pipe(); process.standardError = pipe
         process.arguments = ["-hide_banner", "-i", result.output.path]

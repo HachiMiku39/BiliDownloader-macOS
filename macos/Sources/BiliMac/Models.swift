@@ -70,6 +70,7 @@ struct Playback {
     var audios: [MediaStream]
     var segments: [MediaStream]
     var qualityNames: [Int: String]
+    var advertisedQualities: [Int]
     var preview: Bool
 
     static func parse(_ raw: [String: Any]) throws -> Playback {
@@ -79,9 +80,13 @@ struct Playback {
         let qualities = data["accept_quality"] as? [Int] ?? []
         let descriptions = data["accept_description"] as? [String] ?? []
         var names: [Int: String] = [:]
+        var advertised = Set(qualities)
         for (key, value) in zip(qualities, descriptions) { names[key] = value }
         for item in data["support_formats"] as? [[String: Any]] ?? [] {
-            if let quality = item["quality"] as? Int { names[quality] = item["new_description"] as? String ?? item["display_desc"] as? String }
+            if let quality = item["quality"] as? Int {
+                advertised.insert(quality)
+                if let name = item["new_description"] as? String ?? item["display_desc"] as? String { names[quality] = name }
+            }
         }
         let videos = (dash["video"] as? [[String: Any]] ?? []).compactMap { MediaStream.parse($0) }
         var audios = (dash["audio"] as? [[String: Any]] ?? []).compactMap { MediaStream.parse($0, label: "标准") }
@@ -93,11 +98,17 @@ struct Playback {
         guard !videos.isEmpty || !segments.isEmpty else {
             throw BiliError.message("没有可下载的视频流。该内容可能需要登录、购买，或暂不支持下载。")
         }
-        return .init(videos: videos, audios: audios, segments: segments, qualityNames: names,
+        return .init(videos: videos, audios: audios, segments: segments, qualityNames: names, advertisedQualities: advertised.sorted(by: >),
                      preview: (data["is_preview"] as? Int ?? 0) != 0 || (data["is_preview"] as? Bool ?? false))
     }
 
     var qualities: [Int] { Array(Set(videos.map(\.quality))).sorted(by: >) }
+    // Like the upstream Windows menu, include the video's advertised formats.
+    // Stream selection must still use only URLs actually returned by the API.
+    var qualityOptions: [Int] { Array(Set(advertisedQualities + qualities)).sorted(by: >) }
+    func preferredQuality(_ requested: Int) -> Int {
+        qualityOptions.first(where: { $0 <= requested }) ?? qualityOptions.first ?? requested
+    }
     func selectVideo(quality: Int, codec: Int) -> MediaStream? {
         let available = qualities
         let chosen = available.first(where: { $0 <= quality }) ?? available.last

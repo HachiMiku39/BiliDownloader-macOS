@@ -306,8 +306,11 @@ struct VideoSelectionView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         Text("画质").font(.caption).foregroundStyle(.secondary)
                         Picker("画质", selection: $store.options.quality) {
-                            if let playback = store.playback, !playback.qualities.isEmpty {
-                                ForEach(playback.qualities, id: \.self) { quality in Text(playback.qualityName(quality)).tag(quality) }
+                            if let playback = store.playback, !playback.qualityOptions.isEmpty {
+                                ForEach(playback.qualityOptions, id: \.self) { quality in
+                                    Text(playback.qualityName(quality) + (playback.qualities.contains(quality) ? "" : " · 待获取"))
+                                        .tag(quality)
+                                }
                             } else { Text("自动选择可用画质").tag(store.options.quality) }
                         }.labelsHidden().frame(maxWidth: .infinity)
                     }
@@ -327,6 +330,11 @@ struct VideoSelectionView: View {
                             if store.playback?.audios.contains(where: { $0.label == "Dolby" }) == true { Text("Dolby").tag("Dolby") }
                         }.labelsHidden().frame(maxWidth: .infinity)
                     }
+                }
+                if let playback = store.playback, !playback.qualities.isEmpty,
+                   !playback.qualities.contains(store.options.quality), !store.options.audioOnly {
+                    Label("当前已获取的最高画质为\(playback.qualityName(playback.qualities[0]))。下载时会重新请求所选画质；若仍未提供，将使用可用画质并在完成后提示。", systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 22) {
                     Toggle("仅下载音频", isOn: $store.options.audioOnly)
@@ -492,7 +500,7 @@ struct PreferencesView: View {
                     BrandMark(size: 48)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("BiliDownloader for Mac").font(.headline)
-                        Text("1.0.1 · SwiftUI / Liquid Glass").font(.caption).foregroundStyle(.secondary)
+                        Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · SwiftUI / Liquid Glass").font(.caption).foregroundStyle(.secondary)
                         Link("基于 Majjcom/BiliDownloader · MIT 许可", destination: URL(string: "https://github.com/Majjcom/BiliDownloader")!).font(.caption)
                     }
                     Spacer()

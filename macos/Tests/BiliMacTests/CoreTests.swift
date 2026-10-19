@@ -52,6 +52,26 @@ final class CoreTests: XCTestCase {
         let decoded = try JSONDecoder().decode(DownloadItem.self, from: JSONEncoder().encode(item))
         XCTAssertEqual(decoded.id, item.id); XCTAssertEqual(decoded.fileStem, item.fileStem)
     }
+    func testAdvertisedHDOptionsRemainSelectableWithoutHDStreams() throws {
+        // Anonymous responses can advertise HD formats while returning only SD URLs.
+        let playback = try Playback.parse([
+            "accept_quality": [120, 116, 80, 64, 32, 16],
+            "accept_description": ["4K 超清", "1080P 60帧", "1080P 高清", "720P", "480P", "360P"],
+            "support_formats": [["quality": 125, "new_description": "HDR 真彩"], ["quality": 80]],
+            "dash": ["video": [
+                ["id": 32, "codecid": 7, "baseUrl": "https://example.com/480"],
+                ["id": 16, "codecid": 7, "baseUrl": "https://example.com/360"]
+            ]]
+        ])
+        XCTAssertEqual(playback.qualityOptions, [125, 120, 116, 80, 64, 32, 16])
+        XCTAssertEqual(playback.qualities, [32, 16])
+        XCTAssertEqual(playback.qualityName(80), "1080P 高清", "A format without a label must not erase the accept_description label")
+        XCTAssertEqual(playback.preferredQuality(80), 80, "Parsing must preserve the requested HD quality")
+        XCTAssertEqual(playback.preferredQuality(112), 80)
+        XCTAssertEqual(playback.selectVideo(quality: 80, codec: 7)?.url.lastPathComponent, "480", "Advertised options must never fabricate an HD stream")
+        let streamOnly = try Playback.parse(["dash": ["video": [["id": 80, "baseUrl": "https://example.com/1080"]]]])
+        XCTAssertEqual(streamOnly.qualityOptions, [80])
+    }
     func testDanmakuEscapesASSControlCodesAndRejectsInvalidXML() throws {
         let xml = Data("<i><d p=\"1.5,1,25,16711680,0,0,0,0\">hello {\\pos(0,0)} &amp; 世界</d><d p=\"2,7,25,1\">advanced</d></i>".utf8)
         let result = try DanmakuConverter.convert(xml)
@@ -112,5 +132,24 @@ final class APITests: XCTestCase {
         StubProtocol.responder = { _ in (200, Data("{\"code\":-404,\"message\":\"视频不存在\"}".utf8)) }
         do { _ = try await api().resolve("av170001"); XCTFail("Expected API error") }
         catch { XCTAssertTrue(error.localizedDescription.contains("视频不存在")) }
+    }
+    func testAnonymousHDSelectionIsSentToPlaybackRequest() async throws {
+        StubProtocol.responder = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            let raw: [String: Any]
+            if request.url!.path.hasSuffix("/nav") {
+                raw = ["code": -101, "data": ["wbi_img": ["img_url": "https://example.com/7cd084941338484aae1ad9425b84077c.png", "sub_url": "https://example.com/4932caff0ff746eab6f01bf08b70ac45.png"]]]
+            } else {
+                let params = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(params.first(where: { $0.name == "qn" })?.value, "80")
+                raw = ["code": 0, "data": ["support_formats": [["quality": 120, "new_description": "4K"], ["quality": 80, "new_description": "1080P"]],
+                    "dash": ["video": [["id": 80, "codecid": 7, "baseUrl": "https://example.com/1080"]]]]]
+            }
+            return (200, try JSONSerialization.data(withJSONObject: raw))
+        }
+        let part = VideoPart(cid: 1, title: "fixture", index: 1, duration: 1, bvid: "BV1uV4y1d7K2", aid: 1)
+        let playback = try await api().playback(part, quality: 80)
+        XCTAssertEqual(playback.selectVideo(quality: 80, codec: 7)?.quality, 80)
+        XCTAssertEqual(playback.qualityOptions, [120, 80])
     }
 }

@@ -119,7 +119,7 @@ final class AppStore: ObservableObject {
                 let media = try await api.playback(result.parts[0])
                 try Task.checkCancellation()
                 playback = media
-                if let quality = media.qualities.first(where: { $0 <= options.quality }) ?? media.qualities.first { options.quality = quality }
+                options.quality = media.preferredQuality(options.quality)
                 if !media.audios.contains(where: { $0.label == options.audio }) { options.audio = "标准" }
                 if media.preview { notice = "当前账号只能试看。请登录拥有权限的账号后重新解析。" }
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
