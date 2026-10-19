@@ -1,5 +1,9 @@
 # BiliDownloader
 
+> **macOS 适配版**：本目录新增了 SwiftUI 原生 Mac 客户端，采用 macOS 27 Liquid Glass 风格，支持视频解析、分集、画质选择、扫码登录、下载队列及暂停续传。原始 Python 客户端保留。
+>
+> Mac 安装、构建、测试和验证范围请看 **[MACOS.md](MACOS.md)**。Mac 源码位于 [`macos/`](macos/)，无需 Python / PySide6；媒体合并需要单独安装 FFmpeg。
+
 ![tag](https://img.shields.io/badge/Language-Python3,_C++-orange.svg) ![tag](https://img.shields.io/badge/License-MIT-green.svg)
 
 ## 介绍
